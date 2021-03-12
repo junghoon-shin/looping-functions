@@ -1,0 +1,13 @@
+---
+title: "Looping functions in R"
+author: "Junghoon Shin"
+date: "10/30/2020"
+output: html_document
+---
+
+# `apply` methods in R
+|Output|Univariate|Multivariate|
+|------|----------|------------|
+|Simplified|sapply|mapply|
+|List|lapply|Map|
+|Original class|endoapply|mendoapply|
