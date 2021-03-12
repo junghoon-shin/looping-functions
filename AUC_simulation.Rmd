@@ -1,0 +1,384 @@
+---
+title: "gHRD vs tHRD simulation"
+author: "Junghoon Shin"
+date: "7/31/2020"
+output: html_document
+---
+
+# Simulation code
+```{r}
+library(ggpubr)
+library(gtools)
+library(magrittr)
+library(tidymodels)
+library(tidyverse)
+
+auc_simulation = function(scenario, n, nsim, TU_gHRD_coef = c(1, 1, 1, 1), TU_drug_sensitivity_coef = c(1, 1, 1, 1), gHRD_drug_sensitivity_coef = 1, sd1 = 1, sd2 = 1, sd3 = 1) {
+  roc_auc_gHRD_sim = vector("numeric", length = nsim)
+  roc_auc_tHRD_sim = vector("numeric", length = nsim)
+  roc_auc_TU_sim = vector("numeric", length = nsim)
+  
+  pr_auc_gHRD_sim = vector("numeric", length = nsim)
+  pr_auc_tHRD_sim = vector("numeric", length = nsim)
+  pr_auc_TU_sim = vector("numeric", length = nsim)
+  
+  for (i in 1:nsim) {
+    input_data = tibble(TU1 = runif(n), TU2 = runif(n), TU3 = runif(n), TU4 = runif(n),
+                        unmeasured1 = rnorm(n, sd = sd1), unmeasured2 = rnorm(n, sd = sd2), unmeasured3 = rnorm(n, sd = sd3))
+    
+    input_data %<>% 
+      rowwise %>% mutate(gHRD_score = sum(TU_gHRD_coef * c_across(c(TU1, TU2, TU3, TU4)))) %>% ungroup %>%
+      mutate(gHRD_score = gHRD_score + unmeasured1 + rnorm(n), gHRD_status = gHRD_score > median(gHRD_score))
+    
+    if (scenario == "TU") {
+      input_data %<>% 
+        rowwise %>% mutate(drug_sensitivity = sum(TU_drug_sensitivity_coef * c_across(c(TU1, TU2, TU3, TU4)))) %>% ungroup %>%
+        mutate(drug_sensitivity = drug_sensitivity + unmeasured2 + rnorm(n), 
+               drug_response = factor(drug_sensitivity > median(drug_sensitivity), levels = c(F, T)))
+    }
+    if (scenario == "gHRD") {
+      input_data %<>% mutate(drug_sensitivity = gHRD_drug_sensitivity_coef*gHRD_score + unmeasured3 + rnorm(n), 
+                             drug_response = factor(drug_sensitivity > median(drug_sensitivity), levels = c(F, T)))
+    }
+
+    training_data = slice(input_data, 1:800)
+    test_data = slice(input_data, 801:1000)
+    
+    logistic_model_gHRD_TU = glm(gHRD_status ~ TU1 + TU2 + TU3 + TU4, data = training_data, family = "binomial")
+    logistic_model_drug_response_TU = glm(drug_response ~ TU1 + TU2 + TU3 + TU4, data = training_data, family = "binomial")
+    
+    test_data %<>% mutate(tHRD_score = predict(logistic_model_gHRD_TU, newdata = test_data, type = "response"), tHRD_status = tHRD_score > 0.5)
+    test_data %<>% mutate(TU_score = predict(logistic_model_drug_response_TU, newdata = test_data, type = "response"))
+    
+    roc_auc_gHRD = test_data %>% roc_auc(drug_response, gHRD_score, event_level = "second") %>% pull(.estimate)
+    roc_auc_tHRD = test_data %>% roc_auc(drug_response, tHRD_score, event_level = "second") %>% pull(.estimate)
+    roc_auc_TU = test_data %>% roc_auc(drug_response, TU_score, event_level = "second") %>% pull(.estimate)
+    
+    pr_auc_gHRD = test_data %>% pr_auc(drug_response, gHRD_score, event_level = "second") %>% pull(.estimate)
+    pr_auc_tHRD = test_data %>% pr_auc(drug_response, tHRD_score, event_level = "second") %>% pull(.estimate)
+    pr_auc_TU = test_data %>% pr_auc(drug_response, TU_score, event_level = "second") %>% pull(.estimate)
+
+    roc_auc_gHRD_sim[i] = roc_auc_gHRD
+    roc_auc_tHRD_sim[i] = roc_auc_tHRD
+    roc_auc_TU_sim[i] = roc_auc_TU
+    
+    pr_auc_gHRD_sim[i] = pr_auc_gHRD
+    pr_auc_tHRD_sim[i] = pr_auc_tHRD
+    pr_auc_TU_sim[i] = pr_auc_TU
+    
+    if (i == 100) {
+      representative_roc_gHRD = test_data %>% roc_curve(drug_response, gHRD_score, event_level = "second") %>% mutate(model = "gHRD model")
+      representative_roc_tHRD = test_data %>% roc_curve(drug_response, tHRD_score, event_level = "second") %>% mutate(model = "tHRD model")
+      representative_roc_TU = test_data %>% roc_curve(drug_response, TU_score, event_level = "second") %>% mutate(model = "TU model")
+      representative_roc = bind_rows(representative_roc_gHRD, representative_roc_tHRD, representative_roc_TU)
+      
+      representative_pr_gHRD = test_data %>% pr_curve(drug_response, gHRD_score, event_level = "second") %>% mutate(model = "gHRD model")
+      representative_pr_tHRD = test_data %>% pr_curve(drug_response, tHRD_score, event_level = "second") %>% mutate(model = "tHRD model")
+      representative_pr_TU = test_data %>% pr_curve(drug_response, TU_score, event_level = "second") %>% mutate(model = "TU model")
+      representative_pr = bind_rows(representative_pr_gHRD, representative_pr_tHRD, representative_pr_TU)
+    }
+  }
+  
+  roc_tbl = tibble(`gHRD model` = roc_auc_gHRD_sim, `tHRD model` = roc_auc_tHRD_sim, `TU model` = roc_auc_TU_sim) %>% 
+    pivot_longer(cols = everything(), names_to = "model", values_to = "AUC") %>% mutate(type = "ROC curve")
+  
+  pr_tbl = tibble(`gHRD model` = pr_auc_gHRD_sim, `tHRD model` = pr_auc_tHRD_sim, `TU model` = pr_auc_TU_sim) %>% 
+    pivot_longer(cols = everything(), names_to = "model", values_to = "AUC") %>% mutate(type = "PR curve")
+  
+  auc_tbl = bind_rows(roc_tbl, pr_tbl) %>% mutate(type = factor(type, levels = c("ROC curve", "PR curve")))
+  
+  return(list(auc_tbl = auc_tbl, representative_roc = representative_roc, representative_pr = representative_pr))
+}
+
+TU_sim1 = auc_simulation("TU", n = 1000, nsim = 100, TU_gHRD_coef = c(3,3,2,5), TU_drug_sensitivity_coef = c(2,4,1,8), sd1 = 5, sd2 = 1)
+TU_sim2 = auc_simulation("TU", n = 1000, nsim = 100, TU_gHRD_coef = c(3,3,2,5), TU_drug_sensitivity_coef = c(2,4,1,8), sd1 = 1, sd2 = 1)
+TU_sim3 = auc_simulation("TU", n = 1000, nsim = 100, TU_gHRD_coef = c(3,3,2,5), TU_drug_sensitivity_coef = c(2,4,1,8), sd1 = 1, sd2 = 5)
+
+gHRD_sim1 = auc_simulation("gHRD", n = 1000, nsim = 100, TU_gHRD_coef = c(3,3,2,5), gHRD_drug_sensitivity_coef = 1, sd1 = 5, sd3 = 5)
+gHRD_sim2 = auc_simulation("gHRD", n = 1000, nsim = 100, TU_gHRD_coef = c(3,3,2,5), gHRD_drug_sensitivity_coef = 1, sd1 = 1, sd3 = 2)
+gHRD_sim3 = auc_simulation("gHRD", n = 1000, nsim = 100, TU_gHRD_coef = c(3,3,2,5), gHRD_drug_sensitivity_coef = 1, sd1 = 1, sd3 = 5)
+```
+
+# Simulation
+1. Logistic regression was used instead of random forest.
+2. For simplicity, TU was simulated with 4 transcripts.
+2. All scenarios were simulated 100 times with 1000 samples each (800 training set + 200 test set).
+
+# Formulation
+1. In all scenarios, gHRD scores are determined by three factors: (1) TUs, (2) other unmeasured variables, and (3) random error.
+2. In all scenarios, tHRD scores are calculated as the probability predicted by the logistic regression model using TUs as predictor variables and gHRD status as the outcome variable (model formula: gHRD status ~ TU1 + TU2 + TU3 + TU4).
+3. In scenarios 1-3, drug response is determined by three factors: (1) TUs, (2) other unmeasured variables, and (3) random error. The difference between these three scenarios is the contribution of TUs to the total variation of gHRD score and drug response.
+
+|Scenario|Contribution of TUs to gHRD score|Contribution of TUs to drug response|
+|--------|---------------------------------|------------------------------------|
+|Scenario 1|Low|High|
+|Scenario 2|High|High|
+|Scenario 3|High|Low|
+
+4. In scenarios 4-6, drug response is determined by three factors: (1) gHRD score, (2) other unmeasured variables, and (3) random error. The difference between these three scenarios is the contribution of TUs and gHRD score to the total variation of gHRD score and drug response, respectively.
+
+|Scenario|Contribution of TUs to gHRD score|Contribution of gHRD score to drug response|
+|--------|---------------------------------|-------------------------------------------|
+|Scenario 4|Low|High|
+|Scenario 5|High|High|
+|Scenario 6|High|Low|
+
+# Model definition
+1. gHRD model means a logistic regression model using gHRD score as the predictor variable and drug response as the outcome variable (model formula: drug response ~ gHRD score).
+2. tHRD model means a logistic regression model using tHRD score as the predictor variable and drug response as the outcome variable (model formula: drug response ~ tHRD score).
+3. TU model means a logistic regression model using TUs as the predictor variables and drug response as the response variable (model formula: drug response ~ TU1 + TU2 + TU3 + TU4).
+
+# Scenario 1
+```{r}
+TU_sim1$auc_tbl %>% ggplot(mapping = aes(x = model, y = AUC)) + geom_boxplot() + facet_grid(cols = vars(type)) + labs(x = NULL)
+TU_sim1$representative_roc %>% autoplot + facet_grid(cols = vars(model))
+TU_sim1$representative_pr %>% autoplot + facet_grid(cols = vars(model))
+
+per_threshold = full_join(TU_sim1$representative_roc %>% filter(!.threshold %in% -Inf), TU_sim1$representative_pr, by = c(".threshold", "model")) %>%
+  rename(Precision = precision, Recall = sensitivity, Specificity = specificity) %>%
+  pivot_longer(cols = c(Specificity, Recall, Precision), names_to = "measure", values_to = "value")
+  
+gHRD_status_cutoff = per_threshold %>% filter(model == "gHRD model") %>% pull(.threshold) %>% median
+
+f1 = per_threshold %>% filter(model == "gHRD model") %>% 
+  ggplot(mapping = aes(x = .threshold, y = value)) + 
+  geom_line(mapping = aes(color = measure)) +
+  geom_vline(xintercept = gHRD_status_cutoff, linetype = "dashed") +
+  scale_x_continuous(breaks = gHRD_status_cutoff, labels = "Median gHRD score") +
+  scale_color_hue(guide = guide_legend(title = NULL)) +
+  labs(title = "gHRD model", x = "gHRD score threshold", y = NULL) + theme(plot.title = element_text(hjust = 0.5))
+f1.legend = get_legend(f1)
+f1 = f1 + guides(color = FALSE)
+
+f2 = per_threshold %>% filter(model == "tHRD model") %>%
+  ggplot(mapping = aes(x = .threshold, y = value)) + 
+  geom_line(mapping = aes(color = measure)) +
+  geom_vline(xintercept = 0.5, linetype = "dashed") +
+  scale_x_continuous(breaks = 0.5) +
+  scale_color_hue(guide = FALSE) +
+  labs(title = "tHRD model", x = "tHRD score threshold", y = NULL) + theme(plot.title = element_text(hjust = 0.5))
+
+ggarrange(f1, f2, f1.legend, nrow = 1, widths = c(4,4,1))
+```
+
+# Scenario 2
+```{r}
+TU_sim2$auc_tbl %>% ggplot(mapping = aes(x = model, y = AUC)) + geom_boxplot() + facet_grid(cols = vars(type)) + labs(x = NULL)
+TU_sim2$representative_roc %>% autoplot + facet_grid(cols = vars(model))
+TU_sim2$representative_pr %>% autoplot + facet_grid(cols = vars(model))
+
+per_threshold = full_join(TU_sim2$representative_roc %>% filter(!.threshold %in% -Inf), TU_sim2$representative_pr, by = c(".threshold", "model")) %>%
+  rename(Precision = precision, Recall = sensitivity, Specificity = specificity) %>%
+  pivot_longer(cols = c(Specificity, Recall, Precision), names_to = "measure", values_to = "value")
+  
+gHRD_status_cutoff = per_threshold %>% filter(model == "gHRD model") %>% pull(.threshold) %>% median
+
+f1 = per_threshold %>% filter(model == "gHRD model") %>% 
+  ggplot(mapping = aes(x = .threshold, y = value)) + 
+  geom_line(mapping = aes(color = measure)) +
+  geom_vline(xintercept = gHRD_status_cutoff, linetype = "dashed") +
+  scale_x_continuous(breaks = gHRD_status_cutoff, labels = "Median gHRD score") +
+  scale_color_hue(guide = guide_legend(title = NULL)) +
+  labs(title = "gHRD model", x = "gHRD score threshold", y = NULL) + theme(plot.title = element_text(hjust = 0.5))
+f1.legend = get_legend(f1)
+f1 = f1 + guides(color = FALSE)
+
+f2 = per_threshold %>% filter(model == "tHRD model") %>%
+  ggplot(mapping = aes(x = .threshold, y = value)) + 
+  geom_line(mapping = aes(color = measure)) +
+  geom_vline(xintercept = 0.5, linetype = "dashed") +
+  scale_x_continuous(breaks = 0.5) +
+  scale_color_hue(guide = FALSE) +
+  labs(title = "tHRD model", x = "tHRD score threshold", y = NULL) + theme(plot.title = element_text(hjust = 0.5))
+
+ggarrange(f1, f2, f1.legend, nrow = 1, widths = c(4,4,1))
+```
+
+# Scenario 3
+```{r}
+TU_sim3$auc_tbl %>% ggplot(mapping = aes(x = model, y = AUC)) + geom_boxplot() + facet_grid(cols = vars(type)) + labs(x = NULL)
+TU_sim3$representative_roc %>% autoplot + facet_grid(cols = vars(model))
+TU_sim3$representative_pr %>% autoplot + facet_grid(cols = vars(model))
+
+per_threshold = full_join(TU_sim3$representative_roc %>% filter(!.threshold %in% -Inf), TU_sim3$representative_pr, by = c(".threshold", "model")) %>%
+  rename(Precision = precision, Recall = sensitivity, Specificity = specificity) %>%
+  pivot_longer(cols = c(Specificity, Recall, Precision), names_to = "measure", values_to = "value")
+  
+gHRD_status_cutoff = per_threshold %>% filter(model == "gHRD model") %>% pull(.threshold) %>% median
+
+f1 = per_threshold %>% filter(model == "gHRD model") %>% 
+  ggplot(mapping = aes(x = .threshold, y = value)) + 
+  geom_line(mapping = aes(color = measure)) +
+  geom_vline(xintercept = gHRD_status_cutoff, linetype = "dashed") +
+  scale_x_continuous(breaks = gHRD_status_cutoff, labels = "Median gHRD score") +
+  scale_color_hue(guide = guide_legend(title = NULL)) +
+  labs(title = "gHRD model", x = "gHRD score threshold", y = NULL) + theme(plot.title = element_text(hjust = 0.5))
+f1.legend = get_legend(f1)
+f1 = f1 + guides(color = FALSE)
+
+f2 = per_threshold %>% filter(model == "tHRD model") %>%
+  ggplot(mapping = aes(x = .threshold, y = value)) + 
+  geom_line(mapping = aes(color = measure)) +
+  geom_vline(xintercept = 0.5, linetype = "dashed") +
+  scale_x_continuous(breaks = 0.5) +
+  scale_color_hue(guide = FALSE) +
+  labs(title = "tHRD model", x = "tHRD score threshold", y = NULL) + theme(plot.title = element_text(hjust = 0.5))
+
+ggarrange(f1, f2, f1.legend, nrow = 1, widths = c(4,4,1))
+```
+
+# Scenario 4
+```{r}
+gHRD_sim1$auc_tbl %>% ggplot(mapping = aes(x = model, y = AUC)) + geom_boxplot() + facet_grid(cols = vars(type)) + labs(x = NULL)
+gHRD_sim1$representative_roc %>% autoplot + facet_grid(cols = vars(model))
+gHRD_sim1$representative_pr %>% autoplot + facet_grid(cols = vars(model))
+
+per_threshold = full_join(gHRD_sim1$representative_roc %>% filter(!.threshold %in% -Inf), gHRD_sim1$representative_pr, by = c(".threshold", "model")) %>%
+  rename(Precision = precision, Recall = sensitivity, Specificity = specificity) %>%
+  pivot_longer(cols = c(Specificity, Recall, Precision), names_to = "measure", values_to = "value")
+  
+gHRD_status_cutoff = per_threshold %>% filter(model == "gHRD model") %>% pull(.threshold) %>% median
+
+f1 = per_threshold %>% filter(model == "gHRD model") %>% 
+  ggplot(mapping = aes(x = .threshold, y = value)) + 
+  geom_line(mapping = aes(color = measure)) +
+  geom_vline(xintercept = gHRD_status_cutoff, linetype = "dashed") +
+  scale_x_continuous(breaks = gHRD_status_cutoff, labels = "Median gHRD score") +
+  scale_color_hue(guide = guide_legend(title = NULL)) +
+  labs(title = "gHRD model", x = "gHRD score threshold", y = NULL) + theme(plot.title = element_text(hjust = 0.5))
+f1.legend = get_legend(f1)
+f1 = f1 + guides(color = FALSE)
+
+f2 = per_threshold %>% filter(model == "tHRD model") %>%
+  ggplot(mapping = aes(x = .threshold, y = value)) + 
+  geom_line(mapping = aes(color = measure)) +
+  geom_vline(xintercept = 0.5, linetype = "dashed") +
+  scale_x_continuous(breaks = 0.5) +
+  scale_color_hue(guide = FALSE) +
+  labs(title = "tHRD model", x = "tHRD score threshold", y = NULL) + theme(plot.title = element_text(hjust = 0.5))
+
+ggarrange(f1, f2, f1.legend, nrow = 1, widths = c(4,4,1))
+```
+
+# Scenario 5
+```{r}
+gHRD_sim2$auc_tbl %>% ggplot(mapping = aes(x = model, y = AUC)) + geom_boxplot() + facet_grid(cols = vars(type)) + labs(x = NULL)
+gHRD_sim2$representative_roc %>% autoplot + facet_grid(cols = vars(model))
+gHRD_sim2$representative_pr %>% autoplot + facet_grid(cols = vars(model))
+
+per_threshold = full_join(gHRD_sim2$representative_roc %>% filter(!.threshold %in% -Inf), gHRD_sim2$representative_pr, by = c(".threshold", "model")) %>%
+  rename(Precision = precision, Recall = sensitivity, Specificity = specificity) %>%
+  pivot_longer(cols = c(Specificity, Recall, Precision), names_to = "measure", values_to = "value")
+  
+gHRD_status_cutoff = per_threshold %>% filter(model == "gHRD model") %>% pull(.threshold) %>% median
+
+f1 = per_threshold %>% filter(model == "gHRD model") %>% 
+  ggplot(mapping = aes(x = .threshold, y = value)) + 
+  geom_line(mapping = aes(color = measure)) +
+  geom_vline(xintercept = gHRD_status_cutoff, linetype = "dashed") +
+  scale_x_continuous(breaks = gHRD_status_cutoff, labels = "Median gHRD score") +
+  scale_color_hue(guide = guide_legend(title = NULL)) +
+  labs(title = "gHRD model", x = "gHRD score threshold", y = NULL) + theme(plot.title = element_text(hjust = 0.5))
+f1.legend = get_legend(f1)
+f1 = f1 + guides(color = FALSE)
+
+f2 = per_threshold %>% filter(model == "tHRD model") %>%
+  ggplot(mapping = aes(x = .threshold, y = value)) + 
+  geom_line(mapping = aes(color = measure)) +
+  geom_vline(xintercept = 0.5, linetype = "dashed") +
+  scale_x_continuous(breaks = 0.5) +
+  scale_color_hue(guide = FALSE) +
+  labs(title = "tHRD model", x = "tHRD score threshold", y = NULL) + theme(plot.title = element_text(hjust = 0.5))
+
+ggarrange(f1, f2, f1.legend, nrow = 1, widths = c(4,4,1))
+```
+
+# Scenario 6
+```{r}
+gHRD_sim3$auc_tbl %>% ggplot(mapping = aes(x = model, y = AUC)) + geom_boxplot() + facet_grid(cols = vars(type)) + labs(x = NULL)
+gHRD_sim3$representative_roc %>% autoplot + facet_grid(cols = vars(model))
+gHRD_sim3$representative_pr %>% autoplot + facet_grid(cols = vars(model))
+
+per_threshold = full_join(gHRD_sim3$representative_roc %>% filter(!.threshold %in% -Inf), gHRD_sim3$representative_pr, by = c(".threshold", "model")) %>%
+  rename(Precision = precision, Recall = sensitivity, Specificity = specificity) %>%
+  pivot_longer(cols = c(Specificity, Recall, Precision), names_to = "measure", values_to = "value")
+  
+gHRD_status_cutoff = per_threshold %>% filter(model == "gHRD model") %>% pull(.threshold) %>% median
+
+f1 = per_threshold %>% filter(model == "gHRD model") %>% 
+  ggplot(mapping = aes(x = .threshold, y = value)) + 
+  geom_line(mapping = aes(color = measure)) +
+  geom_vline(xintercept = gHRD_status_cutoff, linetype = "dashed") +
+  scale_x_continuous(breaks = gHRD_status_cutoff, labels = "Median gHRD score") +
+  scale_color_hue(guide = guide_legend(title = NULL)) +
+  labs(title = "gHRD model", x = "gHRD score threshold", y = NULL) + theme(plot.title = element_text(hjust = 0.5))
+f1.legend = get_legend(f1)
+f1 = f1 + guides(color = FALSE)
+
+f2 = per_threshold %>% filter(model == "tHRD model") %>%
+  ggplot(mapping = aes(x = .threshold, y = value)) + 
+  geom_line(mapping = aes(color = measure)) +
+  geom_vline(xintercept = 0.5, linetype = "dashed") +
+  scale_x_continuous(breaks = 0.5) +
+  scale_color_hue(guide = FALSE) +
+  labs(title = "tHRD model", x = "tHRD score threshold", y = NULL) + theme(plot.title = element_text(hjust = 0.5))
+
+ggarrange(f1, f2, f1.legend, nrow = 1, widths = c(4,4,1))
+```
+
+# Summary
+In scenarios 1-3, drug resopnse is determined by TU rather than gHRD. In these cases, by using tHRD model, we can mitigate the model performance loss caused by noise variables that influence gHRD but not TUs (hence not drug response). These noise variables are illustrated in the figures below.
+```{r}
+input_data = tibble(TU1 = runif(1000), TU2 = runif(1000), TU3 = runif(1000), TU4 = runif(1000),
+                    unmeasured1 = rnorm(1000, sd = 5), unmeasured2 = rnorm(1000, sd = 1))
+
+input_data %<>% mutate(gHRD_score = 3*TU1 + 3*TU2 + 2*TU3 + 5*TU4 + unmeasured1 + rnorm(1000),
+                       gHRD_status = gHRD_score > median(gHRD_score),
+                       drug_sensitivity = 2*TU1 + 4*TU2 + 1*TU3 + 8*TU4 + unmeasured2 + rnorm(1000),
+                       drug_response = drug_sensitivity > median(drug_sensitivity))
+
+training_data = slice(input_data, 1:800)
+test_data = slice(input_data, 801:1000)
+
+logistic_model_gHRD_TU = glm(gHRD_status ~ TU1 + TU2 + TU3 + TU4, data = training_data, family = "binomial")
+
+test_data %<>% mutate(tHRD_score = predict(logistic_model_gHRD_TU, newdata = ., type = "response"),
+                      tHRD_status = tHRD_score,
+                      logit_tHRD_score = logit(tHRD_score))
+
+lm_gHRD_logit_tHRD = lm(gHRD_score ~ logit_tHRD_score, data = test_data)
+
+test_data %<>% mutate(noise = lm_gHRD_logit_tHRD$residuals)
+
+test_data %>% ggplot(mapping = aes(x = logit(tHRD_score), y = gHRD_score)) + geom_point() + geom_smooth(method = "lm")
+test_data %>% ggplot(mapping = aes(x = logit(tHRD_score), y = noise)) + geom_point() + geom_smooth(method = "lm")
+test_data %>% ggplot(mapping = aes(x = drug_response, y = noise)) + geom_boxplot()
+```
+
+On the other hand, in scenarios 4-6, drug resopnse is determined by gHRD rather than TU. In these cases, by using tHRD model, we fail to capture the effect of unmeasured variables that influence gHRD (hence drug response) but not TUs. These unmeasured variables are illustrated in the figures below.
+```{r}
+input_data = tibble(TU1 = runif(1000), TU2 = runif(1000), TU3 = runif(1000), TU4 = runif(1000),
+                    unmeasured1 = rnorm(1000, sd = 5), unmeasured2 = rnorm(1000, sd = 5), unmeasured3 = rnorm(1000, sd = 5))
+
+input_data %<>% mutate(gHRD_score = 3*TU1 + 3*TU2 + 2*TU3 + 5*TU4 + unmeasured1 + rnorm(1000),
+                       gHRD_status = gHRD_score > median(gHRD_score),
+                       drug_sensitivity = gHRD_score + unmeasured3 + rnorm(1000),
+                       drug_response = drug_sensitivity > median(drug_sensitivity))
+
+training_data = slice(input_data, 1:800)
+test_data = slice(input_data, 801:1000)
+
+logistic_model_gHRD_TU = glm(gHRD_status ~ TU1 + TU2 + TU3 + TU4, data = training_data, family = "binomial")
+
+test_data %<>% mutate(tHRD_score = predict(logistic_model_gHRD_TU, newdata = ., type = "response"),
+                      tHRD_status = tHRD_score > 0.5,
+                      logit_tHRD_score = logit(tHRD_score))
+
+lm_gHRD_logit_tHRD = lm(gHRD_score ~ logit_tHRD_score, data = test_data)
+
+test_data %<>% mutate(unmeasured = lm_gHRD_logit_tHRD$residuals)
+
+test_data %>% ggplot(mapping = aes(x = logit(tHRD_score), y = gHRD_score)) + geom_point() + geom_smooth(method = "lm")
+test_data %>% ggplot(mapping = aes(x = logit(tHRD_score), y = unmeasured)) + geom_point() + geom_smooth(method = "lm")
+test_data %>% ggplot(mapping = aes(x = drug_response, y = unmeasured)) + geom_boxplot()
+```
