@@ -6,6 +6,7 @@ output: html_document
 ---
 
 # `apply` methods in R
+
 |Output|Univariate|Multivariate|
 |------|----------|------------|
 |Simplified|sapply|mapply|

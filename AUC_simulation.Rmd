@@ -6,6 +6,7 @@ output: html_document
 ---
 
 # Simulation code
+
 ```{r}
 library(ggpubr)
 library(gtools)
@@ -100,11 +101,13 @@ gHRD_sim3 = auc_simulation("gHRD", n = 1000, nsim = 100, TU_gHRD_coef = c(3,3,2,
 ```
 
 # Simulation
+
 1. Logistic regression was used instead of random forest.
 2. For simplicity, TU was simulated with 4 transcripts.
 2. All scenarios were simulated 100 times with 1000 samples each (800 training set + 200 test set).
 
 # Formulation
+
 1. In all scenarios, gHRD scores are determined by three factors: (1) TUs, (2) other unmeasured variables, and (3) random error.
 2. In all scenarios, tHRD scores are calculated as the probability predicted by the logistic regression model using TUs as predictor variables and gHRD status as the outcome variable (model formula: gHRD status ~ TU1 + TU2 + TU3 + TU4).
 3. In scenarios 1-3, drug response is determined by three factors: (1) TUs, (2) other unmeasured variables, and (3) random error. The difference between these three scenarios is the contribution of TUs to the total variation of gHRD score and drug response.
@@ -124,11 +127,13 @@ gHRD_sim3 = auc_simulation("gHRD", n = 1000, nsim = 100, TU_gHRD_coef = c(3,3,2,
 |Scenario 6|High|Low|
 
 # Model definition
+
 1. gHRD model means a logistic regression model using gHRD score as the predictor variable and drug response as the outcome variable (model formula: drug response ~ gHRD score).
 2. tHRD model means a logistic regression model using tHRD score as the predictor variable and drug response as the outcome variable (model formula: drug response ~ tHRD score).
 3. TU model means a logistic regression model using TUs as the predictor variables and drug response as the response variable (model formula: drug response ~ TU1 + TU2 + TU3 + TU4).
 
 # Scenario 1
+
 ```{r}
 TU_sim1$auc_tbl %>% ggplot(mapping = aes(x = model, y = AUC)) + geom_boxplot() + facet_grid(cols = vars(type)) + labs(x = NULL)
 TU_sim1$representative_roc %>% autoplot + facet_grid(cols = vars(model))
@@ -162,6 +167,7 @@ ggarrange(f1, f2, f1.legend, nrow = 1, widths = c(4,4,1))
 ```
 
 # Scenario 2
+
 ```{r}
 TU_sim2$auc_tbl %>% ggplot(mapping = aes(x = model, y = AUC)) + geom_boxplot() + facet_grid(cols = vars(type)) + labs(x = NULL)
 TU_sim2$representative_roc %>% autoplot + facet_grid(cols = vars(model))
@@ -195,6 +201,7 @@ ggarrange(f1, f2, f1.legend, nrow = 1, widths = c(4,4,1))
 ```
 
 # Scenario 3
+
 ```{r}
 TU_sim3$auc_tbl %>% ggplot(mapping = aes(x = model, y = AUC)) + geom_boxplot() + facet_grid(cols = vars(type)) + labs(x = NULL)
 TU_sim3$representative_roc %>% autoplot + facet_grid(cols = vars(model))
@@ -228,6 +235,7 @@ ggarrange(f1, f2, f1.legend, nrow = 1, widths = c(4,4,1))
 ```
 
 # Scenario 4
+
 ```{r}
 gHRD_sim1$auc_tbl %>% ggplot(mapping = aes(x = model, y = AUC)) + geom_boxplot() + facet_grid(cols = vars(type)) + labs(x = NULL)
 gHRD_sim1$representative_roc %>% autoplot + facet_grid(cols = vars(model))
@@ -261,6 +269,7 @@ ggarrange(f1, f2, f1.legend, nrow = 1, widths = c(4,4,1))
 ```
 
 # Scenario 5
+
 ```{r}
 gHRD_sim2$auc_tbl %>% ggplot(mapping = aes(x = model, y = AUC)) + geom_boxplot() + facet_grid(cols = vars(type)) + labs(x = NULL)
 gHRD_sim2$representative_roc %>% autoplot + facet_grid(cols = vars(model))
@@ -294,6 +303,7 @@ ggarrange(f1, f2, f1.legend, nrow = 1, widths = c(4,4,1))
 ```
 
 # Scenario 6
+
 ```{r}
 gHRD_sim3$auc_tbl %>% ggplot(mapping = aes(x = model, y = AUC)) + geom_boxplot() + facet_grid(cols = vars(type)) + labs(x = NULL)
 gHRD_sim3$representative_roc %>% autoplot + facet_grid(cols = vars(model))
@@ -327,6 +337,7 @@ ggarrange(f1, f2, f1.legend, nrow = 1, widths = c(4,4,1))
 ```
 
 # Summary
+
 In scenarios 1-3, drug resopnse is determined by TU rather than gHRD. In these cases, by using tHRD model, we can mitigate the model performance loss caused by noise variables that influence gHRD but not TUs (hence not drug response). These noise variables are illustrated in the figures below.
 ```{r}
 input_data = tibble(TU1 = runif(1000), TU2 = runif(1000), TU3 = runif(1000), TU4 = runif(1000),
